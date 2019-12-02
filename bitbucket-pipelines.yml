@@ -1,0 +1,278 @@
+image: atlassian/default-image:2
+definitions:
+  caches:
+    npm: $HOME/.npm
+    cypress: $HOME/.cache/Cypress
+pipelines:
+  branches:
+    dev:
+      - step:
+          name: Apply infrastucture on dev stage
+          script:
+            #
+            # Install Terraform -> dev
+            #
+            - echo Downloading Terraform executable
+            - mkdir -p ~/bin
+            - cd ~/bin
+            - export PATH="$PATH:/root/bin"
+            - wget https://releases.hashicorp.com/terraform/0.12.16/terraform_0.12.16_linux_amd64.zip
+            - echo Terraform was downloaded successfully.
+            - unzip terraform_0.12.16_linux_amd64.zip
+
+            #
+            # Provision Terraform resources
+            #
+            - cd ${BITBUCKET_CLONE_DIR}/terraform
+            - echo Initializing Terraform
+            - terraform init
+            - echo Selecting the correct workspace
+            - (terraform workspace new dev || true) && terraform workspace select dev
+            # Ensure Terraform syntax is valid before proceeding.
+            - echo Validating the template
+            - terraform validate -var-file=dev.tfvars
+            - echo Applying the template on the dev environment
+            # Ensure this step passes so that the state is always pushed.
+            - terraform apply -var-file=dev.tfvars -auto-approve || true
+            - terraform output > ${BITBUCKET_CLONE_DIR}/outputs
+            - cat ${BITBUCKET_CLONE_DIR}/outputs
+          artifacts:
+            - outputs
+      - step:
+          name: Install and Build for dev
+          image: node:10.15.0
+          caches:
+            - npm
+            - cypress
+            - node
+          script:
+            # Install dependencies
+            - cd website/
+            - echo Installing NPM dependencies
+            - npm install
+            - echo Dependencies installed successfully
+            # Build
+            - echo Building the application
+            - npm run build -- --mode dev
+            - echo Application build successfully
+          artifacts:
+            - website/dist/**
+            - outputs
+      - step:
+          image: mesosphere/aws-cli
+          name: Deploy to dev
+          deployment: test
+          script:
+            - BUCKET_WEBSITE_NAME=$(awk '/s3_hosting_name/ {print $3}' ${BITBUCKET_CLONE_DIR}/outputs)
+            # Deploy the builded application to dev environment
+            - echo 'Uploading the application to S3 bucket -> ${BUCKET_WEBSITE_NAME}'
+            - aws s3 sync website/dist/ s3://$BUCKET_WEBSITE_NAME
+            - echo Application deployed successfully
+          artifacts:
+            - outputs
+      - step:
+          image: mesosphere/aws-cli
+          name: Purge the cache from CloudFront
+          script:
+            - AWS_CLOUDFRONT_ID=$(awk '/cdn_distribution_id/ {print $3}' ${BITBUCKET_CLONE_DIR}/outputs)
+            - echo Invalidating CloudFront cache
+            - aws cloudfront create-invalidation --distribution-id $AWS_CLOUDFRONT_ID --paths "/*"
+            - echo Cache invalidate with success
+      - step:
+          image: cypress/base:10
+          name: Run integration tests on dev
+          caches:
+            - npm
+            - cypress
+            - node
+          script:
+            - cd website/
+            - echo Installing NPM dependencies
+            - npm install
+            - echo Dependencies installed successfully
+            # Run tests
+            - echo Executing integration tests on dev
+            - CYPRESS_SITE_URL=https://dev-project-name.domain npm run e2e
+            - echo Tests executed successfully
+
+    master:
+      - step:
+          name: Apply infrastucture on staging stage
+          script:
+            #
+            # Install Terraform -> staging
+            #
+            - echo Downloading Terraform executable
+            - mkdir -p ~/bin
+            - cd ~/bin
+            - export PATH="$PATH:/root/bin"
+            - wget https://releases.hashicorp.com/terraform/0.12.16/terraform_0.12.16_linux_amd64.zip
+            - echo Terraform was downloaded successfully.
+            - unzip terraform_0.12.16_linux_amd64.zip
+
+            #
+            # Provision Terraform resources
+            #
+            - cd ${BITBUCKET_CLONE_DIR}/terraform
+            - echo Initializing Terraform
+            - terraform init
+            - echo Selecting the correct workspace
+            - (terraform workspace new stage || true) && terraform workspace select stage
+            # Ensure Terraform syntax is valid before proceeding.
+            - echo Validating the template
+            - terraform validate -var-file=stage.tfvars
+            - echo Applying the template on the stage environment
+            # Ensure this step passes so that the state is always pushed.
+            - terraform apply -var-file=stage.tfvars -auto-approve || true
+            - terraform output > ${BITBUCKET_CLONE_DIR}/outputs
+            - cat ${BITBUCKET_CLONE_DIR}/outputs
+          artifacts:
+            - outputs
+      - step:
+          name: Install, Test and Build for Staging
+          image: node:10.15.0
+          caches:
+            - npm
+            - cypress
+            - node
+          script:
+            # Install dependencies
+            - cd website/
+            - echo Installing NPM dependencies
+            - npm install
+            - echo Dependencies installed successfully
+            # Run unit tests
+            - echo Running unit tests
+            - npm run test
+            - echo All tests were executed successfully
+            # Build
+            - echo Building the application
+            - npm run build -- --mode stage
+            - echo Application build successfully
+          artifacts:
+            - website/dist/**
+            - outputs
+      - step:
+          image: mesosphere/aws-cli
+          name: Deploy to Staging
+          deployment: staging
+          script:
+            - BUCKET_WEBSITE_NAME=$(awk '/s3_hosting_name/ {print $3}' ${BITBUCKET_CLONE_DIR}/outputs)
+            # Deploy the builded application to dev environment
+            - echo 'Uploading the application to S3 bucket -> ${BUCKET_WEBSITE_NAME}'
+            - aws s3 sync website/dist/ s3://$BUCKET_WEBSITE_NAME
+            - echo Application deployed successfully
+          artifacts:
+            - outputs
+      - step:
+          image: mesosphere/aws-cli
+          name: Purge the cache from CloudFront
+          script:
+            - AWS_CLOUDFRONT_ID=$(awk '/cdn_distribution_id/ {print $3}' ${BITBUCKET_CLONE_DIR}/outputs)
+            - echo Invalidating CloudFront cache
+            - aws cloudfront create-invalidation --distribution-id $AWS_CLOUDFRONT_ID --paths "/*"
+            - echo Cache invalidate with success
+      - step:
+          image: cypress/base:10
+          name: Run integration tests on staging
+          caches:
+            - npm
+            - cypress
+            - node
+          script:
+            - cd website/
+            - echo Installing NPM dependencies
+            - npm install
+            - echo Dependencies installed successfully
+            # Run tests
+            - echo Executing integration tests on staging
+            - CYPRESS_SITE_URL=https://stage-project-name.domain npm run e2e
+            - echo Tests executed successfully
+      - step:
+          name: Apply infrastucture on prod
+          trigger: manual
+          script:
+            #
+            # Install Terraform -> prod
+            #
+            - echo Downloading Terraform executable
+            - mkdir -p ~/bin
+            - cd ~/bin
+            - export PATH="$PATH:/root/bin"
+            - wget https://releases.hashicorp.com/terraform/0.12.16/terraform_0.12.16_linux_amd64.zip
+            - echo Terraform was downloaded successfully.
+            - unzip terraform_0.12.16_linux_amd64.zip
+
+            #
+            # Provision Terraform resources
+            #
+            - cd ${BITBUCKET_CLONE_DIR}/terraform
+            - echo Initializing Terraform
+            - terraform init
+            - echo Selecting the correct workspace
+            - (terraform workspace new prod || true) && terraform workspace select prod
+            # Ensure Terraform syntax is valid before proceeding.
+            - echo Validating the template
+            - terraform validate -var-file=prod.tfvars
+            - echo Applying the template on the staging environment
+            # Ensure this step passes so that the state is always pushed.
+            - terraform apply -var-file=prod.tfvars -auto-approve || true
+            - terraform output > ${BITBUCKET_CLONE_DIR}/outputs
+            - cat ${BITBUCKET_CLONE_DIR}/outputs
+          artifacts:
+            - outputs
+      - step:
+          name: Install and Build for prod
+          caches:
+            - npm
+            - cypress
+            - node
+          script:
+            # Install dependencies
+            - cd website/
+            - echo Installing NPM dependencies
+            - npm install
+            - echo Dependencies installed successfully
+            # Build
+            - echo Building the application for prod
+            - npm run build -- --mode prod
+            - echo Application build successfully
+          artifacts:
+            - website/dist/**
+            - outputs
+      - step:
+          image: mesosphere/aws-cli
+          name: Deploy to prod
+          deployment: production
+          script:
+            - BUCKET_WEBSITE_NAME=$(awk '/s3_hosting_name/ {print $3}' ${BITBUCKET_CLONE_DIR}/outputs)
+            # Deploy the builded application to dev environment
+            - echo 'Uploading the application to S3 bucket -> ${BUCKET_WEBSITE_NAME}'
+            - aws s3 sync website/dist/ s3://$BUCKET_WEBSITE_NAME
+            - echo Application deployed successfully
+          artifacts:
+            - outputs
+      - step:
+          image: mesosphere/aws-cli
+          name: Purge the cache from CloudFront of prod
+          script:
+            - AWS_CLOUDFRONT_ID=$(awk '/cdn_distribution_id/ {print $3}' ${BITBUCKET_CLONE_DIR}/outputs)
+            - echo Invalidating CloudFront cache
+            - aws cloudfront create-invalidation --distribution-id $AWS_CLOUDFRONT_ID --paths "/*"
+            - echo Cache invalidate with success
+      - step:
+          image: cypress/base:10
+          name: Run integration tests on prod
+          caches:
+            - npm
+            - cypress
+            - node
+          script:
+            - cd website/
+            - echo Installing NPM dependencies
+            - npm install
+            - echo Dependencies installed successfully
+            # Run tests
+            - echo Executing integration tests on prod
+            - CYPRESS_SITE_URL=https://prod-project-name.domain npm run e2e
+            - echo Tests executed successfully
