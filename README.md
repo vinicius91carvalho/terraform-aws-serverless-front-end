@@ -131,7 +131,10 @@ Sendo que:
 #### Instalação das ferramentas
 
 - É necessário instalar o [Terraform][9] para aplicação das receitas
-- O Node Package Manager [npm][10] para gerar o build da aplicação front-end escrita em React
+- É necessário instalar o [AWS CLI][15] e configurá-lo com os dados do [usuário IAM com acesso programático][14]
+- O Node Package Manager [npm][10]
+ 
+[15]: https://docs.aws.amazon.com/pt_br/cli/latest/userguide/cli-chap-configure.html
 
 #### Executar os comandos
 
